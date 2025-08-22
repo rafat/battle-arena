@@ -1,0 +1,14 @@
+{
+  "name": "Agents Arena",
+  "tagline": "Welcome to the Agents Arena. Create and battle powerful AI Warriors.",
+  "description": "Agents Arena is an AI agent battle platform build on top of Next.js and SEI EVM testnet. It uses a combination of OpenAI as the brain of the virtual fighters and SEI's verifiable randomness to help generate fight outcomes.",
+  "team": [
+    {
+      "name": "Rafat Hussain",
+      "email": "rafat.hsn@gmail.com"
+    }
+  ],
+  "demo_url": "https://agents-arena.netlify.app/",
+  "video_url": "https://www.youtube.com/watch?v=QlGpPUxa5Zo",
+  "technologies": ["Next.js", "Solidity", "Supabase", "OpenAI", "SEI EVM"]
+}
