@@ -73,7 +73,7 @@ export function AgentSelector({ onSelect, selected, title, disabled = false }: A
             }`}
           >
             <div className="flex items-center space-x-4">
-              <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center">
+              <div className="w-16 h-16 bg-gradient-to-br from-red-600 to-red-800 rounded-full flex items-center justify-center">
                 <span className="text-white font-bold text-lg">
                   #{agent.id}
                 </span>

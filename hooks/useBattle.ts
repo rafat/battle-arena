@@ -1,12 +1,14 @@
 // hooks/useBattle.ts
 import { useState, useCallback, useEffect } from 'react';
-import { useWriteContract, useWaitForTransactionReceipt, useReadContract, useWatchContractEvent } from 'wagmi';
+import { useWriteContract, useWaitForTransactionReceipt, useReadContract, useWatchContractEvent, useAccount, useChainId, useConfig } from 'wagmi';
 import { parseEventLogs, TransactionReceipt } from 'viem';
+import { readContract } from 'viem/actions';
 import { BattleTactics } from '@/lib/types/contracts';
 import { CONTRACTS } from '@/lib/web3/config';
-import { ARENA_ABI } from '@/lib/contracts/abis';
+import { ARENA_ABI, AGENT_FACTORY_ABI } from '@/lib/contracts/abis';
 import { Log, ChainMismatchError } from 'viem';
 import { decodeEventLog } from 'viem';
+import { useRandomnessFee } from './useRandomnessFee';
 
 // Define the event argument types
 interface BattleStartedEventArgs {
@@ -45,20 +47,32 @@ export const useBattle = () => {
   const [error, setError] = useState<string | null>(null);
   const [hasBattleId, setHasBattleId] = useState(false);
 
+  // Get wallet and network info for debugging
+  const { address, isConnected } = useAccount();
+  const chainId = useChainId();
+  const config = useConfig();
+
+  // Get randomness fee from PythEntropy contract
+  const { fee: randomnessFee, isLoading: isFeeLoading, isConfigured: isFeeConfigured } = useRandomnessFee();
+
   const ARENA_CONTRACT_ADDRESS = CONTRACTS.ARENA 
   ? (CONTRACTS.ARENA as `0x${string}`) 
   : undefined;
 
+  const AGENT_FACTORY_CONTRACT_ADDRESS = CONTRACTS.AGENT_FACTORY 
+  ? (CONTRACTS.AGENT_FACTORY as `0x${string}`) 
+  : undefined;
+
   // Write contract hooks
   const { 
-    writeContract: writeStartBattle, 
+    writeContractAsync: writeStartBattle, 
     data: startBattleHash, 
     isPending: isCreating,
     error: startBattleError
   } = useWriteContract();
   
   const { 
-    writeContract: writeFight, 
+    writeContractAsync: writeFight, 
     data: fightHash, 
     isPending: isFighting,
     error: fightError
@@ -72,10 +86,11 @@ export const useBattle = () => {
     args: currentBattleId ? [currentBattleId] : undefined,
     query: {
       enabled: !!currentBattleId,
-      // Only refetch frequently when battle is ongoing
-      refetchInterval: battleState === 'fighting' ? 2000 : false,
-      // Add a stale time to prevent unnecessary refetches if data is fresh enough
-      staleTime: battleState === 'fighting' ? 1000 : 5000, 
+      // Only refetch when battle is actively fighting and not finished
+      // Stop all refreshing once battle state is 'finished'
+      refetchInterval: (battleState === 'fighting') ? 2000 : false,
+      // Add a stale time to prevent unnecessary refetches
+      staleTime: battleState === 'finished' ? 60000 : (battleState === 'fighting' ? 1000 : 5000), 
     },
   }) as { data: BattleData | undefined, refetch: () => Promise<any> };
 
@@ -85,6 +100,28 @@ export const useBattle = () => {
     abi: ARENA_ABI,
     functionName: 'getBattleCount',
   });
+
+  // Effect to update battle state based on contract data
+  useEffect(() => {
+    if (battleData && currentBattleId) {
+      const battle = battleData as BattleData;
+      
+      // If contract shows battle is finished but our state is not updated
+      if (battle.status === 1 && battleState !== 'finished') {
+        console.log('📊 Contract shows battle is finished, updating state to finished');
+        setBattleState('finished');
+        // Clear any ongoing intervals by forcing a state update
+        setTimeout(() => {
+          console.log('✅ Battle state confirmed as finished, stopping all refresh intervals');
+        }, 100);
+      }
+      
+      // If contract shows battle is ongoing and we're in fighting state, that's correct
+      if (battle.status === 0 && battleState === 'fighting') {
+        console.log('📊 Battle is ongoing as expected');
+      }
+    }
+  }, [battleData, currentBattleId, battleState]);
 
   // Wait for battle creation transaction
   const startReceipt = useWaitForTransactionReceipt({
@@ -219,9 +256,10 @@ export const useBattle = () => {
           const winner = args.winner;
           const loser = args.loser;
           
-          console.log('Battle finished - ID:', battleId.toString(), 'Winner:', winner.toString());
+          console.log('🏁 Battle finished - ID:', battleId.toString(), 'Winner:', winner.toString());
           
           if (currentBattleId && battleId === currentBattleId) {
+            console.log('🎯 Setting battle state to finished for current battle');
             setBattleState('finished');
             setError(null);
             syncBattleFinishedToDatabase(battleId, winner, loser);
@@ -234,11 +272,20 @@ export const useBattle = () => {
     onError: (error) => {
       console.error('Error watching BattleFinished event:', error);
       setError(`Failed to listen for battle finish event: ${error.message || error}`);
-      // Consider actions if the watch fails, e.g., prompt user to refresh.
     },
-    // Ensure this is only enabled when the contract address is definitely available
-    enabled: !!ARENA_CONTRACT_ADDRESS && (isFighting || fightReceipt.isLoading),
-    // pollingInterval: 3000,
+    // Only watch for BattleFinished events when we have a current battle and it's not already finished
+    // This prevents the watcher from staying active after battle completion
+    enabled: (() => {
+      const isEnabled = !!ARENA_CONTRACT_ADDRESS && !!currentBattleId && battleState !== 'finished' && (battleState === 'fighting' || isFighting || fightReceipt.isLoading);
+      console.log('👀 BattleFinished event watcher enabled:', isEnabled, {
+        hasContract: !!ARENA_CONTRACT_ADDRESS,
+        hasBattleId: !!currentBattleId,
+        battleState,
+        isFighting,
+        isLoadingReceipt: fightReceipt.isLoading
+      });
+      return isEnabled;
+    })(),
   });
 
   // Fixed getBattleFromContract function
@@ -265,6 +312,7 @@ export const useBattle = () => {
   const handleBattleCreated = useCallback(async (receipt: TransactionReceipt) => {
     try {
       console.log('Battle creation transaction confirmed:', receipt.transactionHash);
+      console.log('Transaction receipt logs count:', receipt.logs.length);
       
       // Prefer event listener for state updates, but parse from receipt as a robust backup
       const logs = parseEventLogs({
@@ -273,16 +321,62 @@ export const useBattle = () => {
         logs: receipt.logs,
       });
       
+      console.log('Parsed BattleStarted logs count:', logs.length);
+      
       if (logs.length > 0) {
         const battleStartedLog = logs[0];
-        // Use type assertion for args directly
-        const args = (battleStartedLog as unknown as { args: BattleStartedEventArgs }).args;
-        const battleId = args.battleId;
+        console.log('Raw battle started log:', battleStartedLog);
         
+        // Use proper event decoding instead of type assertion
+        const decoded = decodeEventLog({
+          abi: ARENA_ABI,
+          eventName: 'BattleStarted',
+          data: battleStartedLog.data,
+          topics: battleStartedLog.topics,
+        });
+        
+        console.log('Decoded event:', decoded);
+        const args = decoded.args as unknown as BattleStartedEventArgs;
+        console.log('Event args:', args);
+        
+        const battleId = args.battleId;
         console.log('Battle ID from transaction receipt:', battleId.toString());
         
+        // Validate that battleId is not 0
+        if (battleId === BigInt(0)) {
+          console.error('⚠️ Battle ID is 0! This indicates an issue with the contract or event parsing.');
+          console.log('Full event args:', args);
+          console.log('Raw log data:', battleStartedLog.data);
+          console.log('Raw log topics:', battleStartedLog.topics);
+          
+          // Try to get the battle count as a fallback
+          try {
+            console.log('🔄 Attempting to get battle count as fallback for battle ID...');
+            const battleCountResponse = await fetch('/api/arena/battle-count');
+            if (battleCountResponse.ok) {
+              const countData = await battleCountResponse.json();
+              const fallbackBattleId = BigInt(countData.count || 1);
+              console.log('📊 Using fallback battle ID from count:', fallbackBattleId.toString());
+              
+              // Use the fallback battle ID
+              setCurrentBattleId(fallbackBattleId);
+              setHasBattleId(true);
+              setBattleState('waiting');
+              
+              // Wait and sync with fallback ID
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              await syncBattleToDatabase(fallbackBattleId, receipt);
+              return; // Exit early with fallback
+            }
+          } catch (fallbackError) {
+            console.error('❌ Fallback battle count fetch failed:', fallbackError);
+          }
+          
+          throw new Error('Battle ID is 0 and fallback failed');
+        }
+        
         // Only set if we don't already have it from the event listener (race condition safety)
-        if (!hasBattleId || currentBattleId !== battleId) { // Added currentBattleId check
+        if (!hasBattleId || currentBattleId !== battleId) {
           setCurrentBattleId(battleId);
           setHasBattleId(true);
           setBattleState('waiting');
@@ -292,21 +386,87 @@ export const useBattle = () => {
         // This is crucial, as the chain might not be instantly consistent across RPC nodes.
         await new Promise(resolve => setTimeout(resolve, 3000)); // Increased delay
         
-        // Sync to database
-        await syncBattleToDatabase(battleId, receipt);
+        // Only attempt to sync to database if we have a valid battle ID
+        if (battleId !== BigInt(0)) {
+          // Sync to database - but don't fail the entire process if sync fails
+          try {
+            await syncBattleToDatabase(battleId, receipt);
+          } catch (syncError) {
+            console.error('⚠️ Database sync failed, but battle creation was successful on blockchain:', syncError);
+            // Don't throw here - the battle was created successfully on-chain
+            // Database sync issues shouldn't break the user flow
+          }
+        } else {
+          console.error('❌ Cannot sync battle with ID 0 to database');
+          // Still proceed since the battle might exist on-chain
+        }
       } else {
         console.warn('No BattleStarted event found in transaction receipt logs.');
+        console.log('All receipt logs:', receipt.logs);
+        
+        // Try to parse any events from the logs to see what's there
+        receipt.logs.forEach((log, index) => {
+          console.log(`Log ${index}:`, {
+            address: log.address,
+            topics: log.topics,
+            data: log.data
+          });
+        });
       }
     } catch (err) {
       console.error('Failed to process battle creation from receipt:', err);
       setError(`Failed to process battle creation from receipt: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [hasBattleId, currentBattleId]); // Added currentBattleId to dependency array
+  }, [hasBattleId, currentBattleId]);
 
   // Handle fight completion
   const handleFightCompleted = useCallback(async (receipt: TransactionReceipt) => {
     try {
-      console.log('Fight transaction confirmed:', receipt.transactionHash);
+      console.log('🏁 Fight transaction confirmed:', receipt.transactionHash);
+      console.log('📋 Fight receipt logs count:', receipt.logs.length);
+      
+      // Parse BattleFinished events from the receipt
+      const battleFinishedLogs = parseEventLogs({
+        abi: ARENA_ABI,
+        eventName: 'BattleFinished',
+        logs: receipt.logs,
+      });
+      
+      console.log('🏆 Parsed BattleFinished logs count:', battleFinishedLogs.length);
+      
+      if (battleFinishedLogs.length > 0) {
+        const battleFinishedLog = battleFinishedLogs[0];
+        console.log('🏅 Raw battle finished log:', battleFinishedLog);
+        
+        const decoded = decodeEventLog({
+          abi: ARENA_ABI,
+          eventName: 'BattleFinished',
+          data: battleFinishedLog.data,
+          topics: battleFinishedLog.topics,
+        });
+        
+        console.log('🎯 Decoded BattleFinished event:', decoded);
+        const args = decoded.args as unknown as BattleFinishedEventArgs;
+        console.log('🛡️ BattleFinished event args:', args);
+        
+        const battleId = args.battleId;
+        const winner = args.winner;
+        const loser = args.loser;
+        
+        console.log('🏆 Battle completed - ID:', battleId.toString(), 'Winner:', winner.toString(), 'Loser:', loser.toString());
+        
+        if (currentBattleId && battleId === currentBattleId) {
+          console.log('🎆 Setting battle state to finished for current battle');
+          setBattleState('finished');
+          setError(null);
+          
+          // Sync battle finished to database
+          await syncBattleFinishedToDatabase(battleId, winner, loser);
+        }
+      } else {
+        console.warn('⚠️ No BattleFinished event found in fight transaction receipt');
+        console.log('🗺 All fight receipt logs:', receipt.logs);
+      }
       
       // The BattleFinished event listener will ideally handle state updates.
       // This section can focus on syncing additional data related to the fight receipt.
@@ -316,7 +476,7 @@ export const useBattle = () => {
         await syncBattleResults(currentBattleId, receipt);
       }
     } catch (err) {
-      console.error('Failed to process battle results from receipt:', err);
+      console.error('❌ Failed to process battle results from receipt:', err);
       setError(`Failed to process battle results from receipt: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [currentBattleId]);
@@ -352,37 +512,73 @@ export const useBattle = () => {
     }
   };
 
-  // Sync battle finished event to database
+  // Sync agent data from smart contract to database
+  const syncAgentToDatabase = async (agentId: bigint) => {
+    try {
+      console.log(`🔄 Syncing agent ${agentId} data from contract to database`);
+      
+      // Get agent data from smart contract using wagmi's readContract
+      const agent = await readContract(config.getClient(), {
+        address: AGENT_FACTORY_CONTRACT_ADDRESS as `0x${string}`,
+        abi: AGENT_FACTORY_ABI,
+        functionName: 'getAgent',
+        args: [agentId],
+      }) as any;
+
+      if (!agent || agent.id === BigInt(0)) {
+        console.warn(`Agent ${agentId} not found on contract`);
+        return;
+      }
+
+      // Update agent in database
+      const response = await fetch(`/api/agents/${agentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          level: Number(agent.level),
+          experience: Number(agent.experience),
+          dna: {
+            strength: Number(agent.dna.strength),
+            agility: Number(agent.dna.agility),
+            intelligence: Number(agent.dna.intelligence),
+            elemental_affinity: Number(agent.dna.elementalAffinity),
+          },
+          equipped_item: Number(agent.equippedItem),
+        }),
+      });
+
+      if (!response.ok) {
+        console.warn(`Failed to sync agent ${agentId} to database:`, response.status);
+      } else {
+        console.log(`✅ Agent ${agentId} synced to database successfully`);
+      }
+    } catch (err) {
+      console.warn(`Failed to sync agent ${agentId}:`, err);
+      // Don't throw - agent sync shouldn't break battle flow
+    }
+  };
+
+  // Sync battle finished event to database - DEPRECATED: Use syncBattleResults instead
   const syncBattleFinishedToDatabase = async (
     battleId: bigint,
     winner: bigint,
     loser: bigint
   ) => {
-    try {
-      const response = await fetch('/api/battles/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          battle_id: Number(battleId),
-          winner_id: Number(winner),
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-      }
-
-      console.log('Battle finished event synced to database');
-    } catch (err) {
-      console.error('Failed to sync battle finished event:', err);
-      // Do not re-throw here either if on-chain was successful
-    }
+    // This function is deprecated - syncBattleResults handles the winner update
+    console.log('syncBattleFinishedToDatabase called but deprecated - using syncBattleResults instead');
+    return;
   };
 
   // Fixed syncBattleToDatabase function
   const syncBattleToDatabase = async (battleId: bigint, receipt: TransactionReceipt) => {
     try {
+      // Validate battle ID first
+      if (battleId === BigInt(0)) {
+        throw new Error('Cannot sync battle with ID 0 to database');
+      }
+      
+      console.log('Syncing battle to database with ID:', battleId.toString());
+      
       // Get battle data from contract with retry logic
       let battle = await getBattleFromContract(battleId);
       let retryCount = 0;
@@ -400,6 +596,13 @@ export const useBattle = () => {
       if (!battle) {
         throw new Error('Failed to fetch battle data from contract after retries for initial sync');
       }
+      
+      console.log('Successfully fetched battle data:', {
+        battleId: battle.battleId.toString(),
+        status: battle.status,
+        agentIds: battle.agentIds.map(id => id.toString()),
+        arena: battle.arena
+      });
 
       const response = await fetch('/api/battles', {
         method: 'POST',
@@ -420,15 +623,30 @@ export const useBattle = () => {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({ error: 'Unknown API error' }));
+        
+        // Check if it's a duplicate key constraint (battle already exists)
+        if (errorData.error && errorData.error.includes('duplicate key') || errorData.error.includes('already exists')) {
+          console.log('⚠️ Battle already exists in database, this is expected on page refresh or reconnection');
+          // Don't throw error for duplicates - just log and continue
+          return;
+        }
+        
         throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
 
       const result = await response.json();
-      console.log('Battle synced to database:', result);
+      console.log('✅ Battle synced to database:', result);
     } catch (err) {
-      console.error('Failed to sync battle to database:', err);
-      throw err; // Re-throw to handle in calling function
+      const error = err as Error;
+      console.error('❌ Failed to sync battle to database:', error.message);
+      
+      // Only throw for non-duplicate errors to avoid breaking the user experience
+      if (!error.message.includes('duplicate key') && !error.message.includes('already exists')) {
+        throw err; // Re-throw to handle in calling function
+      } else {
+        console.log('🔄 Ignoring duplicate battle error - battle likely already exists in database');
+      }
     }
   };
 
@@ -513,18 +731,61 @@ export const useBattle = () => {
       }
 
       // Sync individual battle events (if needed, or batch this in the main sync)
-      // This loop is fine if each event needs its own endpoint.
+      // Make this resilient - don't let event sync failures break the main battle flow
       for (const event of battleEvents) {
-        const eventResponse = await fetch(`/api/battles/${battleId}/events`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(event),
-        });
+        try {
+          const eventResponse = await fetch(`/api/battles/${battleId}/events`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(event),
+          });
 
-        if (!eventResponse.ok) {
-          console.error(`Failed to sync event: ${event.event_type} - ${eventResponse.status}`);
+          if (!eventResponse.ok) {
+            console.warn(`Failed to sync event: ${event.event_type} - ${eventResponse.status}`);
+            // Don't throw error here - just log and continue
+          } else {
+            console.log(`✅ Synced event: ${event.event_type}`);
+          }
+        } catch (eventError) {
+          console.warn(`Failed to sync event: ${event.event_type}`, eventError);
+          // Don't throw error here - just log and continue
         }
       }
+
+      // IMPORTANT: Sync agent data after battle completion
+      // This ensures agent level/experience updates are reflected in the database
+      console.log('🔄 Syncing agent data after battle completion...');
+      
+      // Sync both agents (winner gained experience, loser's stats may have changed)
+      const agentsToSync = [battle.agentIds[0], battle.agentIds[1]];
+      for (const agentId of agentsToSync) {
+        await syncAgentToDatabase(agentId);
+      }
+      
+      // Also sync agent battle stats (wins, losses, damage, etc.)
+      try {
+        const statsResponse = await fetch('/api/agents/sync-stats', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            battle_id: Number(battleId),
+            winner_id: Number(winner),
+            loser_id: Number(battle.agentIds[0] === winner ? battle.agentIds[1] : battle.agentIds[0]),
+            battle_events: battleEvents,
+          }),
+        });
+
+        if (!statsResponse.ok) {
+          console.warn('Failed to sync agent battle stats:', statsResponse.status);
+        } else {
+          console.log('✅ Agent battle stats synced successfully');
+        }
+      } catch (statsError) {
+        console.warn('Failed to sync agent battle stats:', statsError);
+        // Don't throw - stats sync shouldn't break battle flow
+      }
+      
+      console.log('✅ Agent synchronization completed');
     } catch (err) {
       console.error('Failed to sync battle results:', err);
       throw err;
@@ -544,6 +805,69 @@ export const useBattle = () => {
       handleFightCompleted(fightReceipt.data);
     }
   }, [fightReceipt.data, fightReceipt.isSuccess, handleFightCompleted]);
+
+  // Additional effect to poll battle status when fighting (backup for unreliable event watchers)
+  useEffect(() => {
+    if (battleState === 'fighting' && currentBattleId) {
+      console.log('🔍 Starting battle status polling for battle ID:', currentBattleId.toString());
+      
+      const pollBattleStatus = async () => {
+        try {
+          const battle = await getBattleFromContract(currentBattleId);
+          if (battle) {
+            console.log('📊 Poll result - Battle status:', battle.status, 'for ID:', battle.battleId.toString());
+            
+            if (battle.status === 1) { // Battle finished
+              console.log('✅ Polling detected battle completion!');
+              setBattleState('finished');
+              setError(null);
+              
+              // Determine winner and loser
+              const winner = battle.winner;
+              let loser: bigint | null = null;
+              if (battle.agentIds.length === 2) {
+                loser = battle.agentIds[0] === winner ? battle.agentIds[1] : battle.agentIds[0];
+              }
+              
+              // Sync to database
+              if (winner && loser) {
+                await syncBattleFinishedToDatabase(currentBattleId, winner, loser);
+              }
+              
+              return; // Stop polling
+            }
+          }
+        } catch (error) {
+          console.error('❌ Error polling battle status:', error);
+        }
+      };
+      
+      // Poll every 5 seconds when fighting (increased from 3 seconds to reduce spam)
+      const pollInterval = setInterval(pollBattleStatus, 5000);
+      
+      // Initial poll after a short delay
+      const initialPollTimeout = setTimeout(pollBattleStatus, 2000);
+      
+      return () => {
+        console.log('🚿 Stopping battle status polling for battle ID:', currentBattleId?.toString());
+        clearInterval(pollInterval);
+        clearTimeout(initialPollTimeout);
+      };
+    }
+  }, [battleState, currentBattleId]); // Removed dependencies that cause unnecessary restarts
+
+  // Additional effect to ensure proper state cleanup when battle finishes
+  useEffect(() => {
+    if (battleState === 'finished') {
+      console.log('🛑 Battle finished - ensuring all refresh intervals are stopped');
+      // Force a small delay to ensure all pending operations complete
+      const timeoutId = setTimeout(() => {
+        console.log('✅ Battle cleanup completed');
+      }, 1000);
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [battleState]);
 
     const createBattle = useCallback(async ({
     agent1,
@@ -567,19 +891,44 @@ export const useBattle = () => {
         return;
       }
 
-      await writeStartBattle({
+      if (!isFeeConfigured) {
+        const msg = 'Battle system not configured properly. Please try again later.';
+        setError(msg);
+        console.error(msg);
+        setBattleState('idle');
+        return;
+      }
+
+      if (isFeeLoading) {
+        const msg = 'System is initializing. Please wait a moment...';
+        setError(msg);
+        console.warn(msg);
+        setBattleState('idle');
+        return;
+      }
+
+      console.log('Using randomness fee:', randomnessFee.toString());
+
+      const battleTxHash = await writeStartBattle({
         address: ARENA_CONTRACT_ADDRESS,
         abi: ARENA_ABI,
         functionName: 'startBattle',
         args: [agent1, tactics1, agent2, tactics2], // Corrected argument order based on Arena.sol
+        value: randomnessFee, // Include the fee payment
       });
+      
+      console.log('🚀 Battle creation transaction submitted with hash:', battleTxHash);
+      
+      if (!battleTxHash) {
+        throw new Error('Battle creation transaction failed to submit - no transaction hash returned');
+      }
     } catch (err) {
       console.error('Failed to create battle:', err);
       // Provide more specific error if possible
       setError(`Failed to create battle: ${err instanceof Error ? err.message : String(err)}`);
       setBattleState('idle');
     }
-  }, [writeStartBattle, ARENA_CONTRACT_ADDRESS]);
+  }, [writeStartBattle, ARENA_CONTRACT_ADDRESS, randomnessFee, isFeeLoading, isFeeConfigured]);
 
   const executeFight = useCallback(async () => {
     if (!currentBattleId) {
@@ -595,30 +944,73 @@ export const useBattle = () => {
       return;
     }
 
+    if (!isFeeConfigured) {
+      const msg = 'Battle system not configured properly. Please try again later.';
+      setError(msg);
+      console.error(msg);
+      return;
+    }
+
+    if (isFeeLoading) {
+      const msg = 'System is initializing. Please wait a moment...';
+      setError(msg);
+      console.warn(msg);
+      return;
+    }
+
     try {
-      console.log('Executing fight for battle ID:', currentBattleId.toString());
+      console.log('🥊 Executing fight for battle ID:', currentBattleId.toString());
+      console.log('💰 Using randomness fee:', randomnessFee.toString());
+      console.log('🔍 Contract address:', ARENA_CONTRACT_ADDRESS);
+      console.log('🔍 Fee configured:', isFeeConfigured);
+      console.log('🔍 Fee loading:', isFeeLoading);
+      
+      // Debug wallet and network state
+      console.log('💼 Wallet connected:', isConnected);
+      console.log('💼 Wallet address:', address);
+      console.log('🌐 Chain ID:', chainId);
+      console.log('🌐 Expected SEI Testnet Chain ID: 1328');
+      
       setBattleState('fighting');
       setError(null);
 
-      await writeFight({
+      console.log('🚀 Attempting to submit fight transaction...');
+      
+      const fightTxHash = await writeFight({
         address: ARENA_CONTRACT_ADDRESS,
         abi: ARENA_ABI,
         functionName: 'fight',
         args: [currentBattleId],
+        value: randomnessFee, // Include the fee payment
+        gas: BigInt(2000000), // Explicit gas limit for complex battle execution
       });
+      
+      console.log('🚀 Fight transaction submitted with hash:', fightTxHash);
+      console.log('🚀 Transaction hash type:', typeof fightTxHash);
+      console.log('🚀 Transaction hash length:', fightTxHash?.length || 'undefined');
+      
+      if (!fightTxHash) {
+        throw new Error('Fight transaction failed to submit - no transaction hash returned');
+      }
+      
     } catch (err) {
-      console.error('Failed to execute fight:', err);
+      console.error('❌ Failed to execute fight - Full error:', err);
+      console.error('❌ Error type:', typeof err);
+      console.error('❌ Error message:', err instanceof Error ? err.message : String(err));
+      console.error('❌ Error stack:', err instanceof Error ? err.stack : 'No stack trace');
       setError(`Failed to execute fight: ${err instanceof Error ? err.message : String(err)}`);
       // Revert to 'waiting' if fight fails, allowing re-attempt
       setBattleState('waiting'); 
     }
-  }, [currentBattleId, writeFight, ARENA_CONTRACT_ADDRESS]);
+  }, [currentBattleId, writeFight, ARENA_CONTRACT_ADDRESS, randomnessFee, isFeeLoading, isFeeConfigured]);
 
   const resetBattle = useCallback(() => {
+    console.log('🔄 Resetting battle state to idle');
     setCurrentBattleId(null);
     setBattleState('idle');
     setError(null);
     setHasBattleId(false);
+    console.log('✅ Battle state reset completed');
   }, []);
 
   // Update battle state based on write contract errors
@@ -645,6 +1037,11 @@ export const useBattle = () => {
     battleCount,
     error,
     hasBattleId,
+
+    // Randomness fee information
+    randomnessFee,
+    isFeeLoading,
+    isFeeConfigured,
 
     // Battle actions
     createBattle,

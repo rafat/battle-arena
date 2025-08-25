@@ -12,7 +12,7 @@ export default function CreateAgentPage() {
 
   if (!address) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-red-900 via-red-800 to-red-950 flex items-center justify-center">
         <div className="text-center">
           <h1 className="text-4xl font-bold text-white mb-8">Create Agent</h1>
           <div className="text-white/80 mb-8">
@@ -34,7 +34,7 @@ export default function CreateAgentPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 py-8">
+    <div className="min-h-screen bg-gradient-to-br from-red-900 via-red-800 to-red-950 py-8">
       <div className="container mx-auto px-4">
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-white mb-4">🤖 Create New Agent</h1>

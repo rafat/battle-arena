@@ -14,6 +14,9 @@ export default function NavBar() {
         <Link href="/agents" className="text-white hover:text-indigo-400 transition">
           Agents
         </Link>
+        <Link href="/agents/create" className="text-green-400 hover:text-green-300 transition font-semibold">
+          ➕ Create Agent
+        </Link>
         <Link href="/arena" className="text-white hover:text-indigo-400 transition">
           Arena
         </Link>

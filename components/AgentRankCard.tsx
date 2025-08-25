@@ -104,7 +104,7 @@ export function AgentRankCard({ agentStats, rank }: AgentRankCardProps) {
           </div>
           
           <div className="flex flex-col">
-            <span className="text-2xl font-bold text-purple-400">{agentStats.total_battles}</span>
+            <span className="text-2xl font-bold text-red-300">{agentStats.total_battles}</span>
             <span className="text-xs text-gray-400">Battles</span>
           </div>
         </div>

@@ -51,7 +51,7 @@ export default function AgentDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-red-900 via-red-800 to-red-950 flex items-center justify-center">
         <div className="text-white text-xl">Loading agent...</div>
       </div>
     );
@@ -59,7 +59,7 @@ export default function AgentDetailPage() {
 
   if (error || !agent) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-red-900 via-red-800 to-red-950 flex items-center justify-center">
         <div className="text-center">
           <div className="text-white text-xl mb-4">
             {error || 'Agent not found'}
@@ -78,7 +78,7 @@ export default function AgentDetailPage() {
   const isOwner = address && agent.owner_address?.toLowerCase() === address.toLowerCase();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 py-8">
+    <div className="min-h-screen bg-gradient-to-br from-red-900 via-red-800 to-red-950 py-8">
       <div className="container mx-auto px-4">
         {/* Navigation */}
         <div className="mb-8">

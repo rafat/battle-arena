@@ -5,6 +5,8 @@ import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { IPFSImage } from './IPFSImage';
+import { getAllIPFSUrls } from '@/lib/utils/ipfs';
 
 interface AgentCardProps {
   agent: {
@@ -34,21 +36,33 @@ export function AgentCard({ agent, showActions = false, compact = false }: Agent
       try {
         // Fetch metadata if available
         if (agent.metadata_cid) {
-          const metadataResponse = await fetch(`https://ipfs.io/ipfs/${agent.metadata_cid}`);
-          if (metadataResponse.ok) {
-            const metadataData = await metadataResponse.json();
-            setMetadata(metadataData);
-            // Extract CID from image URL
-            if (metadataData.image) {
-              // Handle different IPFS URL formats
-              let cid = metadataData.image;
-              if (cid.includes('ipfs/')) {
-                cid = cid.split('ipfs/')[1];
-              } else if (cid.includes('://')) {
-                cid = cid.split('://')[1];
+          let metadataData = null;
+          
+          // Try multiple IPFS gateways for metadata
+          const metadataUrls = getAllIPFSUrls(agent.metadata_cid);
+          
+          for (const url of metadataUrls) {
+            try {
+              console.log('Trying metadata fetch from:', url);
+              const metadataResponse = await fetch(url, { 
+                signal: AbortSignal.timeout(5000) // 5 second timeout
+              });
+              
+              if (metadataResponse.ok) {
+                metadataData = await metadataResponse.json();
+                console.log('Successfully fetched metadata from:', url);
+                break;
               }
-              setImageUrl(`https://ipfs.io/ipfs/${cid}`);
+            } catch (error) {
+              console.warn('Failed to fetch metadata from:', url, error);
+              continue;
             }
+          }
+          
+          if (metadataData) {
+            setMetadata(metadataData);
+          } else {
+            console.error('Failed to fetch metadata from all gateways for CID:', agent.metadata_cid);
           }
         }
 
@@ -76,14 +90,14 @@ export function AgentCard({ agent, showActions = false, compact = false }: Agent
     return (
       <Link href={`/agents/${agent.id}`}  className="bg-white/10 backdrop-blur-md rounded-lg p-4 border border-white/20 hover:border-white/40 transition-all duration-200">
         <div className="flex items-center space-x-3">
-          <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center overflow-hidden">
+          <div className="w-12 h-12 bg-gradient-to-br from-red-600 to-red-800 rounded-full flex items-center justify-center overflow-hidden">
             {metadata?.image ? (
-              <Image
-                src={`https://ipfs.io/ipfs/${metadata.image}`}
+              <IPFSImage
+                src={metadata.image}
                 alt={displayName}
                 width={48}
                 height={48}
-                className="rounded-full"
+                className="rounded-full object-cover"
               />
             ) : (
               <span className="text-white font-bold text-sm">#{agent.id}</span>
@@ -102,10 +116,10 @@ export function AgentCard({ agent, showActions = false, compact = false }: Agent
     <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 border border-white/20 hover:border-white/40 transition-all duration-200 group">
       <div className="relative">
         {/* Agent Image */}
-        <div className="w-full h-48 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg mb-4 flex items-center justify-center overflow-hidden">
+        <div className="w-full h-48 bg-gradient-to-br from-red-600 to-red-800 rounded-lg mb-4 flex items-center justify-center overflow-hidden">
           {metadata?.image ? (
-            <Image
-              src={`${metadata.image}`}
+            <IPFSImage
+              src={metadata.image}
               alt={displayName}
               width={200}
               height={200}

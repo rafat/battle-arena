@@ -3,13 +3,12 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  
+  /* SEI Color Theme */
+  --sei-primary: #9E1F19;
+  --sei-light: #C44A43;
+  --sei-lighter: #D67068;
+  --sei-lightest: #E89590;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -19,8 +18,26 @@
   }
 }
 
+@theme {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-family-sans: var(--font-geist-sans);
+  --font-family-mono: var(--font-geist-mono);
+  
+  /* SEI Color Extensions */
+  --color-sei-primary: var(--sei-primary);
+  --color-sei-light: var(--sei-light);
+  --color-sei-lighter: var(--sei-lighter);
+  --color-sei-lightest: var(--sei-lightest);
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* SEI gradient background utility */
+.bg-sei-gradient {
+  background: linear-gradient(135deg, var(--sei-lighter) 0%, var(--sei-light) 50%, var(--sei-primary) 100%);
 }

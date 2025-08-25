@@ -47,8 +47,8 @@ export class AIStrategyEngine {
     const arenaNames = ['Neutral Fields', 'Volcanic Plains', 'Mystic Forest'];
     const arenaName = arenaNames[arenaType || 0];
 
-    const winRate = this.calculateWinRate(agentData.id, battleHistory);
-    const recentPerformance = this.analyzeRecentPerformance(agentData.id, battleHistory);
+    const winRate = this.calculateWinRate(agentData.agent_id, battleHistory);
+    const recentPerformance = this.analyzeRecentPerformance(agentData.agent_id, battleHistory);
 
     const prompt = `
     You are an AI battle strategist for agent "${agentData.nickname || `Agent ${agentData.agent_id}`}". 

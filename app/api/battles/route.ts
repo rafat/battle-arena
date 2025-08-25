@@ -53,36 +53,73 @@ export async function POST(request: NextRequest) {
       battle_data,
     } = body;
 
+    console.log('Received battle sync request:', {
+      battle_id,
+      agent1_id,
+      agent2_id,
+      arena_type,
+      hasWinner: !!winner_id,
+      hasTactics: !!(agent1_tactics && agent2_tactics),
+      hasBattleData: !!battle_data
+    });
+
     if (!battle_id || !agent1_id || !agent2_id) {
+      console.error('Missing required fields:', { battle_id, agent1_id, agent2_id });
       return NextResponse.json(
         { error: 'Missing required fields' },
         { status: 400 }
       );
     }
 
+    // Use upsert to handle duplicate battle IDs gracefully
+    // This will insert if the battle doesn't exist, or update if it does
+    const battleRecord = {
+      id: battle_id,  // Primary key
+      agent1_id,
+      agent2_id,
+      agent1_tactics,
+      agent2_tactics,
+      winner_id,
+      arena_type,
+      battle_data,
+    };
+
+    console.log('Attempting upsert with record:', battleRecord);
+
     const { data, error } = await supabase
       .from('battles')
-      .insert([
-        {
-          id: battle_id,
-          agent1_id,
-          agent2_id,
-          agent1_tactics,
-          agent2_tactics,
-          winner_id,
-          arena_type,
-          battle_data,
-          battle_id
-        },
-      ])
+      .upsert(
+        battleRecord,
+        { 
+          onConflict: 'id',  // Use 'id' column for conflict resolution
+          ignoreDuplicates: false  // Update existing records instead of ignoring
+        }
+      )
       .select();
 
     if (error) {
+      console.error('Battle upsert error details:', {
+        error,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code
+      });
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ battle: data[0] });
+    console.log('Battle successfully synced to database:', {
+      battle_id,
+      operation: data && data.length > 0 ? 'inserted/updated' : 'no change',
+      recordCount: data?.length || 0
+    });
+
+    return NextResponse.json({ 
+      success: true,
+      battle: data?.[0] || null 
+    });
   } catch (error) {
+    console.error('Battle sync internal error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

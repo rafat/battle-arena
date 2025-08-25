@@ -72,7 +72,7 @@ export function LevelUpButton({
           
           <div className="w-full bg-gray-700 rounded-full h-3">
             <div
-              className="bg-gradient-to-r from-blue-500 to-purple-500 h-3 rounded-full transition-all duration-500"
+              className="bg-gradient-to-r from-red-600 to-red-800 h-3 rounded-full transition-all duration-500"
               style={{ width: `${Math.min(progressPercentage, 100)}%` }}
             />
           </div>

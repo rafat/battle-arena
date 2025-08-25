@@ -7,10 +7,13 @@ import { AgentCard } from '@/components/AgentCard';
 import Link from 'next/link';
 
 export default function AgentsPage() {
-  const { address } = useAccount();
+  const { address, isConnected } = useAccount();
   const [agents, setAgents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'owned'>('all');
+
+  // Debug wallet state
+  console.log('🔗 Agents page wallet state:', { address, isConnected });
 
   useEffect(() => {
     const fetchAgents = async () => {
@@ -42,7 +45,7 @@ export default function AgentsPage() {
   });
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 py-8">
+    <div className="min-h-screen bg-gradient-to-br from-red-900 via-red-800 to-red-950 py-8">
       <div className="container mx-auto px-4">
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-white mb-4">🤖 Battle Agents</h1>
@@ -78,14 +81,13 @@ export default function AgentsPage() {
             )}
           </div>
 
-          {address && (
-            <Link
-              href="/agents/create"
-              className="bg-gradient-to-r from-green-500 to-green-700 hover:from-green-600 hover:to-green-800 text-white px-6 py-3 rounded-lg font-semibold transition-all duration-200 transform hover:scale-105"
-            >
-              ➕ Create New Agent
-            </Link>
-          )}
+          {/* Always show Create Agent button - it will handle wallet connection internally */}
+          <Link
+            href="/agents/create"
+            className="bg-gradient-to-r from-green-500 to-green-700 hover:from-green-600 hover:to-green-800 text-white px-6 py-3 rounded-lg font-semibold transition-all duration-200 transform hover:scale-105"
+          >
+            ➕ Create New Agent
+          </Link>
         </div>
         {/* Agents Grid */}
         {loading ? (
@@ -112,14 +114,12 @@ export default function AgentsPage() {
                 ? 'Create your first agent to get started!' 
                 : 'Be the first to create an agent!'}
             </div>
-            {address && (
-              <Link
-                href="/agents/create"
-                className="bg-gradient-to-r from-green-500 to-green-700 hover:from-green-600 hover:to-green-800 text-white px-8 py-3 rounded-lg font-semibold transition-all duration-200 transform hover:scale-105 inline-block"
-              >
-                Create Agent
-              </Link>
-            )}
+            <Link
+              href="/agents/create"
+              className="bg-gradient-to-r from-green-500 to-green-700 hover:from-green-600 hover:to-green-800 text-white px-8 py-3 rounded-lg font-semibold transition-all duration-200 transform hover:scale-105 inline-block"
+            >
+              Create Agent
+            </Link>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">

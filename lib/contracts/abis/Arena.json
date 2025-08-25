@@ -215,7 +215,7 @@
     ],
     "name": "fight",
     "outputs": [],
-    "stateMutability": "nonpayable",
+    "stateMutability": "payable",
     "type": "function"
   },
   {
@@ -363,7 +363,7 @@
     ],
     "name": "startBattle",
     "outputs": [],
-    "stateMutability": "nonpayable",
+    "stateMutability": "payable",
     "type": "function"
   }
 ]

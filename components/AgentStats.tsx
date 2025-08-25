@@ -185,7 +185,7 @@ export function AgentStats({ agentId }: AgentStatsProps) {
             <div className="text-white/70 text-sm">Avg Damage Received</div>
           </div>
           <div className="text-center">
-            <div className="text-2xl font-bold text-purple-400">
+            <div className="text-2xl font-bold text-red-300">
               {stats.total_damage_dealt > 0 ? (stats.total_damage_dealt / Math.max(stats.total_damage_received, 1)).toFixed(2) : '0'}
             </div>
             <div className="text-white/70 text-sm">Damage Ratio</div>

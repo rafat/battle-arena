@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase/supabase';
 
 // In-memory cache to prevent duplicate generations
 const tacticsCache = new Map<string, { tactics: any; timestamp: number }>();
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const CACHE_DURATION = 2 * 60 * 1000; // 2 minutes - reduced for more dynamic tactics
 
 export async function POST(request: NextRequest) {
   try {
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
         agent1:agents!agent1_id(agent_id, level, dna),
         agent2:agents!agent2_id(agent_id, level, dna)
       `)
-      .or(`agent1_id.eq.${agentData.id},agent2_id.eq.${agentData.id}`)
+      .or(`agent1_id.eq.${agentData.agent_id},agent2_id.eq.${agentData.agent_id}`)
       .order('created_at', { ascending: false })
       .limit(10);
 

@@ -21,6 +21,19 @@ export function BattleView({ battleId, onNewBattle }: BattleViewProps) {
     abi: ARENA_ABI,
     functionName: 'getBattle',
     args: [battleId],
+    query: {
+      // Stop refreshing when battle is finished (status 1)
+      // Only refresh frequently when battle is ongoing (status 0)
+      refetchInterval: (data) => {
+        const battle = data as any;
+        return battle?.status === 0 ? 3000 : false; // 3 seconds for ongoing battles, no refresh for finished battles
+      },
+      // Add longer stale time for finished battles
+      staleTime: (data) => {
+        const battle = data as any;
+        return battle?.status === 1 ? 300000 : 5000; // 5 minutes for finished battles, 5 seconds for ongoing
+      },
+    },
   });
 
   // Fetch battle events from database
@@ -28,19 +41,35 @@ export function BattleView({ battleId, onNewBattle }: BattleViewProps) {
     const fetchEvents = async () => {
       try {
         const response = await fetch(`/api/battles/${battleId}/events`);
+        
         if (response.ok) {
           const data = await response.json();
           setEvents(data.events || []);
+        } else {
+          setEvents([]);
         }
       } catch (error) {
         console.error('Failed to fetch battle events:', error);
+        setEvents([]);
       } finally {
         setLoading(false);
       }
     };
 
     fetchEvents();
-  }, [battleId]);
+    
+    // Only refetch for ongoing battles
+    let interval: NodeJS.Timeout;
+    const currentBattle = battleData as any;
+    
+    if (currentBattle?.status === 0) { // Only for ongoing battles
+      interval = setInterval(fetchEvents, 5000); // Check every 5 seconds
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [battleId, battleData]);
 
   if (battleLoading || loading) {
     return (
@@ -141,16 +170,6 @@ export function BattleView({ battleId, onNewBattle }: BattleViewProps) {
             ))}
           </div>
         )}
-      </div>
-
-      {/* Action Buttons */}
-      <div className="flex justify-center">
-        <button
-          onClick={onNewBattle}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-lg font-semibold transition-colors"
-        >
-          Start New Battle
-        </button>
       </div>
     </div>
   );

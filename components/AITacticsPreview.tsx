@@ -155,31 +155,13 @@ export const AITacticsPreview: React.FC<AITacticsPreviewProps> = ({
 
       {/* Battle Prediction */}
       {previewTactics1 && previewTactics2 && (
-        <div className="bg-gradient-to-r from-purple-500/20 to-blue-500/20 rounded-lg p-4 border border-purple-500/30">
+        <div className="bg-gradient-to-r from-red-900/20 to-red-800/20 rounded-lg p-4 border border-red-700/30">
           <h4 className="text-white font-semibold mb-3">⚡ Battle Prediction</h4>
           <div className="text-white/80 text-sm">
             <BattlePrediction tactics1={previewTactics1} tactics2={previewTactics2} />
           </div>
         </div>
       )}
-
-      {/* Action Buttons - REMOVED THE BATTLE START BUTTON */}
-      <div className="flex items-center justify-center">
-        <button
-          onClick={generatePreview}
-          disabled={isGenerating || disabled}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium disabled:opacity-50 transition-colors"
-        >
-          {isGenerating ? (
-            <div className="flex items-center space-x-2">
-              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-              <span>Reanalyzing...</span>
-            </div>
-          ) : (
-            '🔄 Regenerate Tactics'
-          )}
-        </button>
-      </div>
     </div>
   );
 };

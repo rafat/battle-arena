@@ -34,6 +34,9 @@ export default function ArenaPage() {
     error: battleError,
     isCreating,
     isFighting,
+    randomnessFee,
+    isFeeLoading,
+    isFeeConfigured,
     // Removed isWaiting and isFinished
   } = useBattle();
 
@@ -103,15 +106,19 @@ export default function ArenaPage() {
   };
 
   const handleNewBattle = () => {
+    // Reset local state first
     setSelectedAgent1(undefined);
     setSelectedAgent2(undefined);
     setTactics1(null);
     setTactics2(null);
+    
+    // Refresh the page to fully reset battle state
+    window.location.reload();
   };
 
   if (!address) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-red-900 via-red-800 to-red-950 flex items-center justify-center">
         <div className="text-center">
           <h1 className="text-4xl font-bold text-white mb-8">Battle Arena</h1>
           <div className="text-white/80 mb-8">
@@ -129,13 +136,18 @@ export default function ArenaPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 py-8">
+    <div className="min-h-screen bg-gradient-to-br from-red-900 via-red-800 to-red-950 py-8">
       <div className="container mx-auto px-4">
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-white mb-4">⚔️ Battle Arena</h1>
           <p className="text-white/80">
             Select your agents and let them battle for glory!
           </p>
+          {isFeeConfigured && (
+            <p className="text-white/50 text-sm mt-2">
+              ⚡ Network fees for secure randomness included automatically
+            </p>
+          )}
         </div>
 
         {/* Battle Status */}
@@ -177,16 +189,6 @@ export default function ArenaPage() {
               >
                 {isFighting ? 'Fighting...' : '⚔️ Fight!'}
               </button>
-
-              {/* New Battle Button */}
-              {battleState === 'finished' && (
-                <button
-                  onClick={handleNewBattle}
-                  className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
-                >
-                  🆕 New Battle
-                </button>
-              )}
             </div>
           </div>
           
@@ -195,14 +197,35 @@ export default function ArenaPage() {
               Battle ID: {currentBattleId.toString()}
             </div>
           )}
+          
+          {/* Fee Information - Only show if there's a configuration issue */}
+          {!isFeeConfigured && (
+            <div className="mt-2 text-red-300 text-sm">
+              ⚠️ Randomness provider not configured
+            </div>
+          )}
         </div>
 
         {/* Show battle view if there's an active battle */}
         {currentBattleId && (battleState === 'fighting' || battleState === 'finished') ? (
-          <BattleView 
-            battleId={currentBattleId}
-            onNewBattle={handleNewBattle}
-          />
+          <div className="space-y-6">
+            <BattleView 
+              battleId={currentBattleId}
+              onNewBattle={handleNewBattle}
+            />
+            
+            {/* New Battle Button - Only show when battle is finished */}
+            {battleState === 'finished' && (
+              <div className="flex justify-center">
+                <button
+                  onClick={handleNewBattle}
+                  className="bg-green-600 hover:bg-green-700 text-white px-8 py-3 rounded-lg font-semibold transition-colors shadow-lg"
+                >
+                  🆕 Start New Battle
+                </button>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="space-y-8">
             {/* Arena Selection */}

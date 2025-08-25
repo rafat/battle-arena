@@ -1,12 +1,12 @@
 'use client';
 
-import { useState, useRef } from 'react';
-import { useAccount, useWatchContractEvent } from 'wagmi';
+import React, { useState, useRef } from 'react';
+import { useAccount, useWatchContractEvent, useWaitForTransactionReceipt } from 'wagmi';
 import { useAgentFactory } from '@/hooks/useContracts';
 import { CONTRACTS } from '@/lib/web3/config';
 import { AGENT_FACTORY_ABI } from '@/lib/contracts/abis';
 import { uploadToPinata, uploadImageToPinata } from '@/lib/web3/pinata';
-import { decodeEventLog } from 'viem';
+import { IPFSImage } from './IPFSImage';
 
 interface CreateAgentFormProps {
   onSuccess: (agentId: bigint) => void
@@ -29,12 +29,202 @@ interface DNA {
 }
 
 export function CreateAgentForm({ onSuccess }: CreateAgentFormProps) {
-  const { address } = useAccount();
-  const { mintAgent,getAgent, isPending } = useAgentFactory();
+  const { address, isConnected, chain } = useAccount();
+  const { mintAgent, getAgent, getTokenIdCounter, isPending, randomnessFee, isFeeLoading, isFeeConfigured } = useAgentFactory();
+  
+  // Steps state - must be declared first before any useEffect that references it
+  const [steps, setSteps] = useState<CreationStep[]>([
+    {
+      step: 1,
+      title: 'Select Avatar',
+      description: 'Choosing your warrior avatar...',
+      completed: false,
+      loading: false,
+    },
+    {
+      step: 2,
+      title: 'Prepare Image',
+      description: 'Preparing avatar for blockchain...',
+      completed: false,
+      loading: false,
+    },
+    {
+      step: 3,
+      title: 'Upload Metadata to IPFS',
+      description: 'Storing agent metadata on IPFS...',
+      completed: false,
+      loading: false,
+    },
+    {
+      step: 4,
+      title: 'Mint Agent',
+      description: 'Creating agent on blockchain...',
+      completed: false,
+      loading: false,
+    },
+    {
+      step: 5,
+      title: 'Save to Database',
+      description: 'Saving agent information...',
+      completed: false,
+      loading: false,
+    },
+  ]);
+  
+  // Other state declarations
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [nickname, setNickname] = useState('');
   const [createdAgentId, setCreatedAgentId] = useState<bigint | null>(null);
+  const [transactionHash, setTransactionHash] = useState<`0x${string}` | undefined>(undefined);
   const lastMetadataCidRef = useRef<string | null>(null);
+
+  // Debug wallet connection
+  console.log('🔗 Wallet state:', {
+    address,
+    isConnected,
+    chain: chain?.name,
+    chainId: chain?.id
+  });
+
+  // Monitor transaction status
+  const { isLoading: isTransactionPending, isSuccess: isTransactionSuccess, error: transactionError } = useWaitForTransactionReceipt({
+    hash: transactionHash,
+    query: {
+      enabled: !!transactionHash,
+    },
+  });
+
+  // Monitor transaction status and handle completion directly
+  React.useEffect(() => {
+    if (transactionHash) {
+      console.log('📦 Transaction status:', {
+        hash: transactionHash,
+        isPending: isTransactionPending,
+        isSuccess: isTransactionSuccess,
+        error: transactionError?.message
+      });
+      
+      if (isTransactionSuccess && steps[3].loading) {
+        console.log('✅ Transaction confirmed! Processing agent creation...');
+        handleTransactionSuccess();
+      }
+    }
+  }, [transactionHash, isTransactionPending, isTransactionSuccess, transactionError, steps]);
+
+  // Handle successful transaction by saving directly to database
+  const handleTransactionSuccess = async () => {
+    try {
+      console.log('💾 Saving agent to database after successful transaction...');
+      
+      // Complete step 4 (blockchain minting)
+      updateStep(3, { loading: false, completed: true });
+      
+      // Start step 5: Save to Database
+      updateStep(4, { loading: true, error: undefined });
+      
+      const metadataCID = lastMetadataCidRef.current;
+      if (!metadataCID) {
+        throw new Error('No metadata CID available');
+      }
+      
+      console.log('🔍 Getting the newly minted agent token ID from contract...');
+      
+      let nextAgentId = 1; // Default fallback
+      
+      try {
+        // Get the current token counter from the contract
+        // Since we just minted, the counter should be at the token ID that was just created
+        const currentCounter = await getTokenIdCounter();
+        nextAgentId = Number(currentCounter);
+        console.log('📊 Current token counter from contract:', currentCounter.toString(), 'Using agent ID:', nextAgentId);
+      } catch (contractError) {
+        console.warn('⚠️ Failed to get token counter from contract, falling back to database approach:', contractError);
+        
+        // Fallback: Query API to get the highest existing agent ID and increment
+        const response = await fetch('/api/agents?limit=1&sort=desc');
+        if (response.ok) {
+          const data = await response.json();
+          const agents = data.agents || [];
+          
+          if (agents.length > 0) {
+            const latestAgent = agents[0];
+            nextAgentId = Math.max(latestAgent.agent_id + 1, 1);
+            console.log('📈 Fallback: Latest agent ID from DB:', latestAgent.agent_id, 'Next ID will be:', nextAgentId);
+          }
+        }
+      }
+      
+      // Generate agent data with proper sequential ID
+      const agentData = {
+        agent_id: nextAgentId,
+        owner_address: address,
+        metadata_cid: metadataCID,
+        nickname: nickname.trim(),
+        dna: {
+          strength: Math.floor(Math.random() * 100) + 1,
+          agility: Math.floor(Math.random() * 100) + 1,
+          intelligence: Math.floor(Math.random() * 100) + 1,
+          elementalAffinity: Math.floor(Math.random() * 4) + 1
+        },
+        level: 1,
+        experience: 0,
+        equipped_item_id: 0
+      };
+      
+      console.log('🤖 Creating agent with proper ID:', agentData);
+      
+      const saveResponse = await fetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(agentData),
+      });
+
+      if (!saveResponse.ok) {
+        const errorData = await saveResponse.json();
+        throw new Error(errorData.error || 'Failed to save agent to database');
+      }
+
+      console.log('✅ Agent saved to database successfully with ID:', nextAgentId);
+      const agentId = BigInt(nextAgentId);
+      setCreatedAgentId(agentId);
+      updateStep(4, { loading: false, completed: true });
+
+      // Trigger final success
+      setTimeout(() => onSuccess(agentId), 1000);
+      
+    } catch (error) {
+      console.error('❌ Failed to save agent after transaction success:', error);
+      updateStep(4, { 
+        loading: false, 
+        error: error instanceof Error ? error.message : 'Failed to save agent to database' 
+      });
+    }
+  };
+
+  // Function to add SEI Testnet to MetaMask
+  const addSeiTestnetToMetaMask = async () => {
+    try {
+      await window.ethereum?.request({
+        method: 'wallet_addEthereumChain',
+        params: [{
+          chainId: '0x530', // 1328 in hex
+          chainName: 'SEI Testnet',
+          nativeCurrency: {
+            name: 'SEI',
+            symbol: 'SEI',
+            decimals: 18,
+          },
+          rpcUrls: ['https://evm-rpc-testnet.sei-apis.com'],
+          blockExplorerUrls: ['https://seitrace.com'],
+        }],
+      });
+      console.log('✅ SEI Testnet added to MetaMask');
+    } catch (error) {
+      console.error('❌ Failed to add SEI Testnet:', error);
+      throw new Error('Failed to add SEI Testnet to MetaMask');
+    }
+  };
+
   const predefinedImages: { url: string; label: string }[] = [
     {
       label: 'Cyber Warrior',
@@ -61,132 +251,6 @@ export function CreateAgentForm({ onSuccess }: CreateAgentFormProps) {
       url: 'https://gateway.pinata.cloud/ipfs/QmcVCmnk6BaUBdLXYg4fngY63kWk3TrV9fieqQJ9EBTMoH',
     },
   ];
-  const [steps, setSteps] = useState<CreationStep[]>([
-    {
-      step: 1,
-      title: 'Generate AI Avatar',
-      description: 'Creating your warrior avatar...',
-      completed: false,
-      loading: false,
-    },
-    {
-      step: 2,
-      title: 'Upload Image to IPFS',
-      description: 'Storing avatar image on IPFS...',
-      completed: false,
-      loading: false,
-    },
-    {
-      step: 3,
-      title: 'Upload Metadata to IPFS',
-      description: 'Storing agent metadata on IPFS...',
-      completed: false,
-      loading: false,
-    },
-    {
-      step: 4,
-      title: 'Mint Agent',
-      description: 'Creating agent on blockchain...',
-      completed: false,
-      loading: false,
-    },
-    {
-      step: 5,
-      title: 'Save to Database',
-      description: 'Saving agent information...',
-      completed: false,
-      loading: false,
-    },
-  ]);
-
-  const getAgentFromContract = async (tokenId: bigint) => {
-    try {
-      const data = await getAgent(tokenId);
-      
-      return {
-        dna: {
-          strength: Number(data.dna.strength),
-          agility: Number(data.dna.agility),
-          intelligence: Number(data.dna.intelligence),
-          elementalAffinity: Number(data.dna.elementalAffinity)
-        },
-        level: Number(data.level),
-        experience: Number(data.experience),
-        metadataCID: data.metadataCID,
-        equippedItem: Number(data.equippedItem)
-      };
-    } catch (error) {
-      console.error('Error fetching agent from contract:', error);
-      throw error;
-    }
-  };
-
- useWatchContractEvent({
-    address: CONTRACTS.AGENT_FACTORY as `0x${string}`,
-    abi: AGENT_FACTORY_ABI,
-    eventName: 'AgentMinted',
-    onLogs: async (logs) => {
-        try {
-        const log = logs[0];
-        const decoded = decodeEventLog({
-            abi: AGENT_FACTORY_ABI,
-            eventName: 'AgentMinted',
-            data: log.data,
-            topics: log.topics,
-        });
-
-        if (!decoded.args) {
-            console.warn('AgentMinted event had no args.');
-            return;
-        }
-
-        const tokenId = BigInt((decoded.args as any).tokenId ?? (decoded.args as any)[0]);
-        setCreatedAgentId(tokenId);
-
-        console.log('AgentMinted received. ID:', tokenId.toString());
-
-        // Complete step 4
-        updateStep(3, { loading: false, completed: true });
-
-        // Step 5: Save to Database
-        updateStep(4, { loading: true, error: undefined });
-        
-        // Fetch full agent data from contract
-        const agentData = await getAgentFromContract(tokenId);
-        
-        console.log('Fetched agent data:', agentData);
-
-        const response = await fetch('/api/agents', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              agent_id: Number(tokenId),
-              owner_address: address,
-              metadata_cid: agentData.metadataCID,
-              nickname: nickname.trim(),
-              dna: agentData.dna,
-              level: agentData.level,
-              experience: agentData.experience,
-              equipped_item_id: agentData.equippedItem
-            }),
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || 'Failed to save agent to database');
-        }
-
-        updateStep(4, { loading: false, completed: true });
-
-        // Trigger final success
-        setTimeout(() => onSuccess(tokenId), 1000);
-        } catch (err) {
-        console.error('Failed to decode AgentMinted log or save:', err);
-        updateStep(4, { loading: false, error: 'Failed to save agent to database' });
-        }
-    },
-    enabled: steps[3].loading,
-    });
 
   const updateStep = (stepIndex: number, updates: Partial<CreationStep>) => {
     setSteps(prev => prev.map((step, index) => 
@@ -236,17 +300,34 @@ export function CreateAgentForm({ onSuccess }: CreateAgentFormProps) {
     if (!address || !nickname.trim()) return;
 
     try {
-      // Step 1: Generate AI Avatar
+      // Step 1: Generate AI Avatar (or use selected predefined image)
       console.log('=== Starting agent creation ===');
       updateStep(0, { loading: true, error: undefined });
-      const openaiImageUrl = await generateAgentImage();
+      const selectedImageUrl = await generateAgentImage();
       updateStep(0, { loading: false, completed: true });
 
-      // Step 2: Upload Image to IPFS
+      // Step 2: Upload Image to IPFS (skip if already an IPFS URL)
       updateStep(1, { loading: true, error: undefined });
-      const ipfsImageUrl = await uploadImageToPinata(openaiImageUrl);
+      let ipfsImageUrl: string;
+      
+      // Check if the selected image is already an IPFS URL
+      if (selectedImageUrl.includes('ipfs/') || selectedImageUrl.includes('ipfs.io') || selectedImageUrl.includes('gateway.pinata.cloud')) {
+        console.log('Image is already on IPFS, skipping upload:', selectedImageUrl);
+        // Extract the hash and use a consistent gateway format
+        const hash = selectedImageUrl.match(/\/ipfs\/([a-zA-Z0-9]+)/)?.[1];
+        if (hash) {
+          ipfsImageUrl = `https://gateway.pinata.cloud/ipfs/${hash}`;
+        } else {
+          ipfsImageUrl = selectedImageUrl; // Fallback to original URL
+        }
+      } else {
+        // Upload new image to IPFS
+        console.log('Uploading new image to IPFS...');
+        ipfsImageUrl = await uploadImageToPinata(selectedImageUrl);
+      }
+      
       updateStep(1, { loading: false, completed: true });
-      console.log('Image uploaded to IPFS:', ipfsImageUrl);
+      console.log('Final image URL:', ipfsImageUrl);
 
       // Step 3: Upload Metadata to IPFS
       updateStep(2, { loading: true, error: undefined });
@@ -276,7 +357,34 @@ export function CreateAgentForm({ onSuccess }: CreateAgentFormProps) {
       // Step 4: Mint Agent on Blockchain
       console.log('Step 4: Creating agent on blockchain...');
       updateStep(3, { loading: true, error: undefined });
-      await mintAgent(metadataCid);
+      
+      // Validate wallet connection and chain
+      if (!isConnected || !address) {
+        throw new Error('Wallet not connected');
+      }
+      
+      if (!chain) {
+        throw new Error('Please add SEI Testnet to MetaMask and connect to it. Chain ID: 1328, RPC: https://evm-rpc-testnet.sei-apis.com');
+      }
+      
+      if (chain.id !== 1328) {
+        throw new Error(`Please switch to SEI Testnet (chain ID: 1328). Current chain: ${chain.name} (${chain.id})`);
+      }
+      
+      try {
+        const txHash = await mintAgent(metadataCid); // This will trigger MetaMask
+        setTransactionHash(txHash); // Store transaction hash for monitoring
+        console.log('Transaction hash received:', txHash);
+        console.log('Transaction initiated - waiting for confirmation...');
+        // The event watcher will handle the rest
+      } catch (mintError) {
+        console.error('Failed to initiate mint transaction:', mintError);
+        updateStep(3, { 
+          loading: false, 
+          error: mintError instanceof Error ? mintError.message : 'Failed to initiate transaction' 
+        });
+        return; // Don't continue to the catch block below
+      }
 
     } catch (error) {
       console.error('Error creating agent:', error);
@@ -291,7 +399,8 @@ export function CreateAgentForm({ onSuccess }: CreateAgentFormProps) {
   };
 
   const isCreating = steps.some(s => s.loading);
-  const canCreate = address && nickname.trim().length > 0 && selectedImage && !isCreating;
+  const isOnCorrectChain = isConnected && chain && chain.id === 1328;
+  const canCreate = address && nickname.trim().length > 0 && selectedImage && !isCreating && isOnCorrectChain;
   const hasError = steps.some(s => s.error);
 
   return (
@@ -335,9 +444,11 @@ export function CreateAgentForm({ onSuccess }: CreateAgentFormProps) {
                   : 'border-white/20 hover:border-white/40'
               }`}
             >
-              <img
+              <IPFSImage
                 src={img.url}
                 alt={img.label}
+                width={200}
+                height={128}
                 className="w-full h-32 object-cover"
               />
               <p className="text-center text-white text-xs py-1 bg-black/40">{img.label}</p>
@@ -380,7 +491,17 @@ export function CreateAgentForm({ onSuccess }: CreateAgentFormProps) {
                 <div className={`text-sm ${
                   step.error ? 'text-red-400' : 'text-white/60'
                 }`}>
-                  {step.error || step.description}
+                  {step.error || (
+                    step.step === 4 && step.loading && isTransactionPending 
+                      ? 'Transaction submitted - waiting for confirmation...' 
+                      : step.step === 4 && step.loading && isPending 
+                      ? 'Waiting for wallet confirmation...'
+                      : step.step === 4 && step.loading && transactionHash
+                      ? 'Transaction confirmed - waiting for event...'
+                      : step.step === 4 && step.loading 
+                      ? 'Creating agent on blockchain...'
+                      : step.description
+                  )}
                 </div>
               </div>
             </div>
@@ -390,11 +511,59 @@ export function CreateAgentForm({ onSuccess }: CreateAgentFormProps) {
 
       {/* Create Button */}
       <div className="text-center">
+        {/* Network Warning */}
+        {isConnected && !chain && (
+          <div className="mb-4 p-4 bg-yellow-500/20 rounded-lg border border-yellow-500/30">
+            <div className="text-yellow-200 text-sm font-medium mb-2">
+              ⚠️ Network Not Detected
+            </div>
+            <div className="text-yellow-200/80 text-xs mb-3">
+              Please add SEI Testnet to MetaMask to continue
+            </div>
+            <button
+              onClick={addSeiTestnetToMetaMask}
+              className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            >
+              Add SEI Testnet to MetaMask
+            </button>
+          </div>
+        )}
+        
+        {/* Chain Mismatch Warning */}
+        {isConnected && chain && chain.id !== 1328 && (
+          <div className="mb-4 p-4 bg-orange-500/20 rounded-lg border border-orange-500/30">
+            <div className="text-orange-200 text-sm font-medium mb-2">
+              ⚠️ Wrong Network
+            </div>
+            <div className="text-orange-200/80 text-xs mb-3">
+              Please switch to SEI Testnet. Current: {chain.name} ({chain.id})
+            </div>
+            <button
+              onClick={addSeiTestnetToMetaMask}
+              className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            >
+              Switch to SEI Testnet
+            </button>
+          </div>
+        )}
+        
+        {/* Only show configuration warning if provider is not configured */}
+        {!isFeeConfigured && (
+          <div className="mb-4 p-3 bg-red-500/20 rounded-lg border border-red-500/30">
+            <div className="text-red-200 text-sm">
+              ⚠️ Randomness provider not configured
+            </div>
+            <div className="text-red-200/70 text-xs mt-1">
+              Please restart the development server to load environment variables
+            </div>
+          </div>
+        )}
+        
         <button
           onClick={handleCreateAgent}
-          disabled={!canCreate}
+          disabled={!canCreate || !isFeeConfigured || isFeeLoading}
           className={`px-8 py-4 rounded-lg font-semibold text-white transition-all duration-200 transform ${
-            canCreate
+            canCreate && isFeeConfigured && !isFeeLoading
               ? 'bg-gradient-to-r from-green-500 to-green-700 hover:from-green-600 hover:to-green-800 hover:scale-105'
               : 'bg-gray-500 cursor-not-allowed opacity-50'
           }`}
@@ -416,6 +585,24 @@ export function CreateAgentForm({ onSuccess }: CreateAgentFormProps) {
       <div className="mt-6 text-center text-white/60 text-sm">
         <p>Your agent's stats will be randomly generated by the smart contract.</p>
         <p>The creation process may take a few minutes to complete.</p>
+        {isFeeConfigured && (
+          <p className="text-white/50 text-xs mt-2">
+            ⚡ Includes minimal network fee for secure randomness generation
+          </p>
+        )}
+        {transactionHash && (
+          <p className="text-blue-300 text-xs mt-2">
+            🔗 Transaction: 
+            <a 
+              href={`https://seitrace.com/tx/${transactionHash}`} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="underline hover:text-blue-200"
+            >
+              {transactionHash.slice(0, 10)}...{transactionHash.slice(-8)}
+            </a>
+          </p>
+        )}
         {createdAgentId && (
           <p className="text-green-400 mt-2">
             Agent ID: {createdAgentId.toString()}

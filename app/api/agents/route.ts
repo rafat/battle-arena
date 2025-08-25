@@ -7,12 +7,18 @@ export async function GET(request: NextRequest) {
     const owner = searchParams.get('owner');
     const limit = searchParams.get('limit') || '20';
     const offset = searchParams.get('offset') || '0';
+    const sort = searchParams.get('sort') || 'desc'; // desc for newest first, asc for oldest first
 
-    const query = supabase
+    let query = supabase
       .from('agents')
       .select('*')
-      .order('created_at', { ascending: false })
+      .order('agent_id', { ascending: sort === 'asc' })
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+
+    // Add owner filter if provided
+    if (owner) {
+      query = query.eq('owner_address', owner);
+    }
 
     const { data, error } = await query;
 
